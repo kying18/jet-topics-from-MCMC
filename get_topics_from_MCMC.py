@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# kylie edits: ./get_topics_from_MCMC.py "150_1_withpbpb_N10_pp150_1_pp150_1_zjet" -1 100 8000 7000 1000
+
 #############################################################################################
 #############################################################################################
 # Developed by Jasmine Brewer and Andrew Turner with conceptual oversight from Jesse Thaler #
@@ -333,12 +335,43 @@ def calc_fracs_distribution(kappas):
 # Functions to plot topics and fractions ############################
 #####################################################################
 
-def plot_topics(datum1, datum2, datumQ, datumG, bins, kappas, filelabel):
+# def plot_topics(datum1, datum2, datumQ, datumG, bins, kappas, filelabel):
+    
+#     [[hist1, hist1_errs, _], _] = datum1
+#     [[hist2, hist2_errs, _], _] = datum2
+#     [[histQ, histQ_errs, _], _] = datumQ
+#     [[histG, histG_errs, _], _] = datumG
+#     histbins = get_mean(bins)
+    
+#     kappa12 = [np.mean(kappas[0]), np.std(kappas[0])]
+#     kappa21 = [np.mean(kappas[1]), np.std(kappas[1])]
+#     [t1, t2] = calc_topics(hist1, hist1_errs, hist2, hist2_errs, kappa12, kappa21)
+    
+#     fig, ax = plt.subplots()
+#     binint = np.linspace(0,max(bins)-10**-5,10000) # for plotting only
+#     colors = ['red','blue']
+#     ax.plot(binint,plot_hist(binint, bins, t2[0]), color=colors[0], label='Topic 2')
+#     ax.fill_between(binint,plot_hist(binint, bins, t2[0] - t2[1]),plot_hist(binint, bins, t2[0] + t2[1]), color=colors[0], alpha=0.3)
+
+#     ax.plot(binint,plot_hist(binint, bins, t1[0]), color=colors[1], label='Topic 1')
+#     ax.fill_between(binint,plot_hist(binint, bins, t1[0] - t1[1]),plot_hist(binint, bins, t1[0] + t1[1]), alpha=0.3, color=colors[1])
+    
+#     ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
+#     ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
+    
+#     ax.set_xlim((0,50))
+#     ax.set_xlabel('Constituent multiplicity')
+#     ax.set_ylabel('Probability')
+#     ax.legend()
+#     plt.tight_layout()
+    
+#     current_dir = Path.cwd()
+#     fig.savefig(current_dir / (filelabel+'_topics.png'))
+
+def plot_topics(datum1, datum2, bins, kappas, filelabel):
     
     [[hist1, hist1_errs, _], _] = datum1
     [[hist2, hist2_errs, _], _] = datum2
-    [[histQ, histQ_errs, _], _] = datumQ
-    [[histG, histG_errs, _], _] = datumG
     histbins = get_mean(bins)
     
     kappa12 = [np.mean(kappas[0]), np.std(kappas[0])]
@@ -354,8 +387,8 @@ def plot_topics(datum1, datum2, datumQ, datumG, bins, kappas, filelabel):
     ax.plot(binint,plot_hist(binint, bins, t1[0]), color=colors[1], label='Topic 1')
     ax.fill_between(binint,plot_hist(binint, bins, t1[0] - t1[1]),plot_hist(binint, bins, t1[0] + t1[1]), alpha=0.3, color=colors[1])
     
-    ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
-    ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
+    # ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
+    # ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
     
     ax.set_xlim((0,50))
     ax.set_xlabel('Constituent multiplicity')
@@ -456,31 +489,56 @@ if __name__ == '__main__':
     
     if nkappa > (nsamples-burn_in)*nwalkers:
         print('number of times to try to sample kappa must be smaller than (nsamples-burn_in)*nwalkers')
-    if ptindex<0 or ptindex>=3:
-        print('Only valid ptindex values are 0, 1, or 2.')
+    # if ptindex<0 or ptindex>=3:
+    #     print('Only valid ptindex values are 0, 1, or 2.')
     
     if system=='PP':
         filename = 'PP_JEWEL_etamax1_constmult'
     if system=='HI':
         filename = 'HI_JEWEL_etamax1_constmult_13invnbYJ'
+    else:
+        filename = system
 
     [indJJ, indYJ, indQ, indG] = list(range(0,4))
 
     current_dir = Path.cwd()
+    # input_dir = current_dir / "inputs"
+    # kappas_dir = current_dir / "kappas"
 
-    file = open( current_dir / (filename+'.pickle'), 'rb')
+    file = open( current_dir / "inputs" / (filename+'.pickle'), 'rb')
     datum = pickle.load(file)
     file.close()
 
     filelabel = system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)
     savelabel = filelabel+'_pt'+str(ptindex)
+
+    dataJJ = datum[indJJ][ptindex] if ptindex != -1 else datum[indJJ]
+    dataYJ = datum[indYJ][ptindex] if ptindex != -1 else datum[indYJ]
+
+    print(len(dataJJ[0][0]), len(dataYJ[0][0]))
     
     bins = range(0,100)    
-    kappas_now = do_MCMC_and_get_kappa(datum[indJJ][ptindex], datum[indYJ][ptindex], bins, savelabel, nwalkers=nwalkers, nsamples=nsamples, burn_in=burn_in, nkappa=nkappa, variation_factor=1e-1, trytimes=15000,bounds=[(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1)],fit_init_point=[13,1.5,1.5,10,1.5,1.5,5,2,2,5,2,2,0.5,0.3,0.5,0.3,0.5,0.3])
+    kappas_now = do_MCMC_and_get_kappa(
+        dataJJ,
+        dataYJ,  
+        bins, 
+        savelabel, 
+        nwalkers=nwalkers, 
+        nsamples=nsamples, 
+        burn_in=burn_in, 
+        nkappa=nkappa, 
+        variation_factor=1e-1, 
+        trytimes=15000,
+        bounds=[(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1)],
+        fit_init_point=[13,1.5,1.5,10,1.5,1.5,5,2,2,5,2,2,0.5,0.3,0.5,0.3,0.5,0.3]
+    )
 
-    file = open(current_dir / ('kappas_'+system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)+'_pt'+str(ptindex)+'.pickle'), 'wb')
+    file = open(current_dir / "kappas" / ('kappas_'+system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)+'_pt'+str(ptindex)+'.pickle'), 'wb')
     pickle.dump([kappas_now], file)
     file.close()
 
     plot_fractions(kappas_now, filelabel)
-    plot_topics(datum[indJJ][ptindex], datum[indYJ][ptindex], datum[indQ][ptindex], datum[indG][ptindex], bins, kappas_now, filelabel)
+    # plot_topics(datum[indJJ][ptindex], datum[indYJ][ptindex], datum[indQ][ptindex], datum[indG][ptindex], bins, kappas_now, filelabel)
+    plot_topics(dataJJ, dataYJ, bins, kappas_now, filelabel)
+
+# ./get_topics_from_MCMC.py 150_1_data -1 100 8000 7000 1000
