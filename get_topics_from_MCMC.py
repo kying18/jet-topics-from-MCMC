@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# kylie edits: ./get_topics_from_MCMC.py "150_1_withpbpb_N10_pp150_1_pp150_1_zjet" -1 100 8000 7000 1000
+# kylie edits: ./get_topics_from_MCMC.py "150_1_withpbpb_N10_pp150_1_pp150_1_zjet" -1 100 8000 7000 1000 9 100 # min and max bins at end
 
 #############################################################################################
 #############################################################################################
@@ -23,7 +23,8 @@ import ipdb
 import pickle
 from pathlib import Path
 import argparse
-
+import os
+import errno
 
 ######################
 ## fitting function for the MCMC
@@ -82,7 +83,7 @@ def func_simul_lsq(theta,x1,y1,x2,y2, bnds):
 def get_simul_fits(bins, hist1, hist2, trytimes, bnds, initial_point):
     
     costnow=np.inf
-    
+    print(len(hist1), len(hist2), bins)
     # try a least squares fit many times with slightly varying initial points, and keep the best one
     for i in range(0,trytimes):
  
@@ -121,7 +122,7 @@ def get_MCMC_samples(x1, y1, y1err, x2, y2, y2err, fit, tot_weights, bnds, varia
 ######################
 ## primary function to do the MCMC and extract kappa values from the posterior
 #####################
-def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, nwalkers=500, nsamples=20000, burn_in=100, variation_factor=1e-2, trytimes=500, nkappa=1000, bounds=[(0,25),(0,15),(0,5),(0,25),(0,15),(0,5),(0,25),(0,15),(0,5)], fit_init_point=[14,8,2,5,9,4,10,5,5,0.5,0.3,0.5,0.3]):
+def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, system, nwalkers=500, nsamples=20000, burn_in=100, variation_factor=1e-2, trytimes=500, nkappa=1000, bounds=[(0,25),(0,15),(0,5),(0,25),(0,15),(0,5),(0,25),(0,15),(0,5)], fit_init_point=[14,8,2,5,9,4,10,5,5,0.5,0.3,0.5,0.3]):
     
     [[hist1, hist1_errs, hist1_n], totweight1] = datum1
     [[hist2, hist2_errs, hist2_n], totweight2] = datum2
@@ -147,7 +148,7 @@ def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, nwalkers=500, nsample
     plt.legend()
     plt.xlim((0,50))
     current_dir = Path.cwd()
-    plt.savefig(current_dir / (filelabel+'_least-squares_fit.png'))
+    plt.savefig(current_dir / 'plots' / system / (filelabel+'_least-squares_fit.png'))
     
     # do the MCMC    
     print('Starting MCMC')        
@@ -162,7 +163,7 @@ def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, nwalkers=500, nsample
     for i in range(ndim):
         axes[i].plot(range(0,nsamples),samples[:, :, i], "k", alpha=0.3)
         axes[i].axvline(x=burn_in,color='blue')   
-    plt.savefig(current_dir / (filelabel+'_MCMC_samples.png'))
+    plt.savefig(current_dir / 'plots' / system / (filelabel+'_MCMC_samples.png'))
     
     # randomly sample "nkappa" points from the posterior on which to extract kappa
     all_index_tuples = [ (i,j) for i in range(burn_in,len(samples)) for j in range(len(samples[0])) ]    
@@ -173,7 +174,7 @@ def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, nwalkers=500, nsample
     # extract kappa from the posterior, only on points of the fit where at least one input histogram is non-zero
     or_mask = (hist1_n>0)|(hist2_n>0)
     mask_label = 'or' 
-    [kappas12, kappas21] = get_kappa(posterior_samples, datum1, datum2, histbins, or_mask, filelabel+'kappas_'+mask_label+'.png')    
+    [kappas12, kappas21] = get_kappa(posterior_samples, datum1, datum2, histbins, or_mask, filelabel+'kappas_'+mask_label+'.png', system)    
 
     del posterior_samples
     
@@ -218,7 +219,7 @@ def lnlike_individ(y, yerr, model, totweight):
 ######################
 ## function to extract kappa values given a sampling of the posterior, and a mask specifying where kappa can be extracted
 #####################      
-def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, upsample_factor=10):
+def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, upsample_factor=10):
     
     [[hist1, hist1_errs, hist1_n], _] = datum1
     [[hist2, hist2_errs, hist2_n], _] = datum2
@@ -294,7 +295,7 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, upsample_f
     ax2.set_xlabel('Constituent multiplicity')
     ax2.legend()
     current_dir = Path.cwd()
-    plt.savefig(current_dir / filelabel)
+    plt.savefig(current_dir / 'plots' / system / filelabel)
     
     return [kappa12, kappa21]
 
@@ -335,7 +336,7 @@ def calc_fracs_distribution(kappas):
 # Functions to plot topics and fractions ############################
 #####################################################################
 
-# def plot_topics(datum1, datum2, datumQ, datumG, bins, kappas, filelabel):
+# def plot_topics(datum1, datum2, datumQ, datumG, bins, kappas, filelabel, system):
     
 #     [[hist1, hist1_errs, _], _] = datum1
 #     [[hist2, hist2_errs, _], _] = datum2
@@ -366,9 +367,9 @@ def calc_fracs_distribution(kappas):
 #     plt.tight_layout()
     
 #     current_dir = Path.cwd()
-#     fig.savefig(current_dir / (filelabel+'_topics.png'))
+#     fig.savefig(current_dir / 'plots' / system / (filelabel+'_topics.png'))
 
-def plot_topics(datum1, datum2, bins, kappas, filelabel):
+def plot_topics(datum1, datum2, bins, kappas, filelabel, system):
     
     [[hist1, hist1_errs, _], _] = datum1
     [[hist2, hist2_errs, _], _] = datum2
@@ -397,10 +398,10 @@ def plot_topics(datum1, datum2, bins, kappas, filelabel):
     plt.tight_layout()
     
     current_dir = Path.cwd()
-    fig.savefig(current_dir / (filelabel+'_topics.png'))
+    fig.savefig(current_dir / 'plots' / system / (filelabel+'_topics.png'))
     
 
-def plot_fractions(kappas, filelabel):
+def plot_fractions(kappas, filelabel, system):
     
     [f1,f2] = calc_fracs_distribution(kappas)
     
@@ -416,7 +417,7 @@ def plot_fractions(kappas, filelabel):
     plt.tight_layout()
     
     current_dir = Path.cwd()
-    fig.savefig(current_dir / (filelabel+'_fractions.png'))
+    fig.savefig(current_dir / 'plots' / system / (filelabel+'_fractions.png'))
 
 
 #####################################################################
@@ -478,6 +479,9 @@ if __name__ == '__main__':
     parser.add_argument('nsamples', type=int)
     parser.add_argument('burn_in', type=int)
     parser.add_argument('nkappa', type=int)
+    # todo make this more flexible so we can use non-int bins
+    parser.add_argument('min_bin', type=int)
+    parser.add_argument('max_bin', type=int)
     args = parser.parse_args()
         
     system = args.system
@@ -486,6 +490,8 @@ if __name__ == '__main__':
     nsamples = args.nsamples
     burn_in = args.burn_in
     nkappa = args.nkappa
+    min_bin = args.min_bin
+    max_bin = args.max_bin 
     
     if nkappa > (nsamples-burn_in)*nwalkers:
         print('number of times to try to sample kappa must be smaller than (nsamples-burn_in)*nwalkers')
@@ -512,17 +518,33 @@ if __name__ == '__main__':
     filelabel = system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)
     savelabel = filelabel+'_pt'+str(ptindex)
 
+    import os
+    try:
+        os.makedirs(f'./plots/{system}')
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+
     dataJJ = datum[indJJ][ptindex] if ptindex != -1 else datum[indJJ]
     dataYJ = datum[indYJ][ptindex] if ptindex != -1 else datum[indYJ]
 
     print(len(dataJJ[0][0]), len(dataYJ[0][0]))
+    # print(dataJJ)
     
-    bins = range(0,100)    
+    # quickly iterate through the data and get the bins
+    for i in range(3):
+        dataJJ[0][i] = dataJJ[0][i][min_bin:max_bin]
+        dataYJ[0][i] = dataYJ[0][i][min_bin:max_bin]
+
+    print(len(dataJJ[0][0]), len(dataYJ[0][0]))
+
+    bins = range(int(min_bin),int(max_bin))   # 0 indexed 
     kappas_now = do_MCMC_and_get_kappa(
         dataJJ,
         dataYJ,  
         bins, 
-        savelabel, 
+        savelabel,
+        system,
         nwalkers=nwalkers, 
         nsamples=nsamples, 
         burn_in=burn_in, 
@@ -537,8 +559,8 @@ if __name__ == '__main__':
     pickle.dump([kappas_now], file)
     file.close()
 
-    plot_fractions(kappas_now, filelabel)
-    # plot_topics(datum[indJJ][ptindex], datum[indYJ][ptindex], datum[indQ][ptindex], datum[indG][ptindex], bins, kappas_now, filelabel)
-    plot_topics(dataJJ, dataYJ, bins, kappas_now, filelabel)
+    plot_fractions(kappas_now, filelabel, system)
+    # plot_topics(datum[indJJ][ptindex], datum[indYJ][ptindex], datum[indQ][ptindex], datum[indG][ptindex], bins, kappas_now, filelabel, system)
+    plot_topics(dataJJ, dataYJ, bins, kappas_now, filelabel, system)
 
 # ./get_topics_from_MCMC.py 150_1_data -1 100 8000 7000 1000
