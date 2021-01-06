@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
-# kylie edits: ./get_topics_from_MCMC.py "150_1_withpbpb_N10_pp150_1_pp150_1_zjet" -1 100 8000 7000 1000 9 100 # min and max bins at end
+# kylie edits:
+# ./get_topics_from_MCMC.py "150_1_histograms_pp150_1_pp150_1_zjet" -1 100 8000 7000 1000
+# ./get_topics_from_MCMC.py "150_1_histograms_pp150_1_pbpb150_0_10_1" -1 100 8000 7000 1000
+# ./get_topics_from_MCMC.py "150_1_histograms_pbpb150_0_10_1_pbpb150_0_10_1_wide" -1 100 8000 7000 1000
 
 #############################################################################################
 #############################################################################################
@@ -479,9 +482,9 @@ if __name__ == '__main__':
     parser.add_argument('nsamples', type=int)
     parser.add_argument('burn_in', type=int)
     parser.add_argument('nkappa', type=int)
-    # todo make this more flexible so we can use non-int bins
-    parser.add_argument('min_bin', type=int)
-    parser.add_argument('max_bin', type=int)
+    # make this more flexible so we can use non-int bins
+    # parser.add_argument('min_bin', type=int)
+    # parser.add_argument('max_bin', type=int)
     args = parser.parse_args()
         
     system = args.system
@@ -490,8 +493,10 @@ if __name__ == '__main__':
     nsamples = args.nsamples
     burn_in = args.burn_in
     nkappa = args.nkappa
-    min_bin = args.min_bin
-    max_bin = args.max_bin 
+    # min_bin = args.min_bin
+    # max_bin = args.max_bin
+    min_bin = 0
+    max_bin = 100 
     
     if nkappa > (nsamples-burn_in)*nwalkers:
         print('number of times to try to sample kappa must be smaller than (nsamples-burn_in)*nwalkers')
@@ -514,6 +519,7 @@ if __name__ == '__main__':
     file = open( current_dir / "inputs" / (filename+'.pickle'), 'rb')
     datum = pickle.load(file)
     file.close()
+    print(datum)
 
     filelabel = system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)
     savelabel = filelabel+'_pt'+str(ptindex)
@@ -529,14 +535,11 @@ if __name__ == '__main__':
     dataYJ = datum[indYJ][ptindex] if ptindex != -1 else datum[indYJ]
 
     print(len(dataJJ[0][0]), len(dataYJ[0][0]))
-    # print(dataJJ)
     
     # quickly iterate through the data and get the bins
     for i in range(3):
         dataJJ[0][i] = dataJJ[0][i][min_bin:max_bin]
         dataYJ[0][i] = dataYJ[0][i][min_bin:max_bin]
-
-    print(len(dataJJ[0][0]), len(dataYJ[0][0]))
 
     bins = range(int(min_bin),int(max_bin))   # 0 indexed 
     kappas_now = do_MCMC_and_get_kappa(
@@ -563,4 +566,3 @@ if __name__ == '__main__':
     # plot_topics(datum[indJJ][ptindex], datum[indYJ][ptindex], datum[indQ][ptindex], datum[indG][ptindex], bins, kappas_now, filelabel, system)
     plot_topics(dataJJ, dataYJ, bins, kappas_now, filelabel, system)
 
-# ./get_topics_from_MCMC.py 150_1_data -1 100 8000 7000 1000
