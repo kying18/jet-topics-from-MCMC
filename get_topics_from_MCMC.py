@@ -5,6 +5,9 @@
 # ./get_topics_from_MCMC.py "150_1_histograms_pp150_1_pbpb150_0_10_1" -1 100 8000 7000 1000
 # ./get_topics_from_MCMC.py "150_1_histograms_pbpb150_0_10_1_pbpb150_0_10_1_wide" -1 100 8000 7000 1000
 
+# ./get_topics_from_MCMC.py "150_1_histograms_pt100_dijets_x10_pbpb150_0_10_pbpb150_0_10_wide" -1 100 8000 7000 1000
+# ./get_topics_from_MCMC.py "150_1_histograms_pt100_dijets_x10_pp150_pbpb150_0_10" -1 100 8000 7000 1000
+
 #############################################################################################
 #############################################################################################
 # Developed by Jasmine Brewer and Andrew Turner with conceptual oversight from Jesse Thaler #
@@ -28,6 +31,9 @@ from pathlib import Path
 import argparse
 import os
 import errno
+
+FOLDER_PREFIX = 'NoMCMC_'
+DO_MCMC = True
 
 ######################
 ## fitting function for the MCMC
@@ -74,7 +80,7 @@ def in_bounds(theta, bounds):
 #### Least squares fitting for starting point of MCMC ###########
 #################################################################
 
-def func_simul_lsq(theta,x1,y1,x2,y2, bnds):
+def func_simul_lsq(theta,x1,y1,x2,y2, bnds=[(-float("inf"), float("inf"))]):
     
     [params, [fracs1, fracs2]] = get_params_and_fracs(theta)
     
@@ -86,11 +92,12 @@ def func_simul_lsq(theta,x1,y1,x2,y2, bnds):
 def get_simul_fits(bins, hist1, hist2, trytimes, bnds, initial_point):
     
     costnow=np.inf
-    print(len(hist1), len(hist2), bins)
+    
     # try a least squares fit many times with slightly varying initial points, and keep the best one
     for i in range(0,trytimes):
  
         new_initial_point = (1+5e-1*np.random.randn( len(initial_point) ))*initial_point
+        # print(new_initial_point)
         
         if bnds==None:
             fit = least_squares(func_simul_lsq, new_initial_point, args=(bins, hist1, bins, hist2))
@@ -98,6 +105,8 @@ def get_simul_fits(bins, hist1, hist2, trytimes, bnds, initial_point):
             fit = least_squares(func_simul_lsq, new_initial_point, args=(bins, hist1, bins, hist2, bnds))
             
         if costnow>fit['cost']:
+            print(fit['cost'])
+            # print(fit)
             fitnow = fit
             costnow = fit['cost']
         
@@ -126,22 +135,35 @@ def get_MCMC_samples(x1, y1, y1err, x2, y2, y2err, fit, tot_weights, bnds, varia
 ## primary function to do the MCMC and extract kappa values from the posterior
 #####################
 def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, system, nwalkers=500, nsamples=20000, burn_in=100, variation_factor=1e-2, trytimes=500, nkappa=1000, bounds=[(0,25),(0,15),(0,5),(0,25),(0,15),(0,5),(0,25),(0,15),(0,5)], fit_init_point=[14,8,2,5,9,4,10,5,5,0.5,0.3,0.5,0.3]):
-    
+
     [[hist1, hist1_errs, hist1_n], totweight1] = datum1
     [[hist2, hist2_errs, hist2_n], totweight2] = datum2
     histbins = get_mean(bins)
     
     # do a simultaneous least-squares fit to the histograms. Used as a starting point for the MCMC    
+    bounds = [(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1)]
+    bounds = [(0, float("inf")) for i in range(len(bounds))]
+
+    fit_init_point=[20,15,2.5,10,
+                    0.5,1.5,5,5,
+                    2,15,10,3,
+                    1,0.1,0.1,1,
+                    0.1,0.1]
+
     fit = get_simul_fits(histbins, hist2, hist1, trytimes, bounds, fit_init_point)
+    
     fitnow = put_fits_in_order( fit['x'], histbins, hist1, histbins, hist2) 
     ndim = len(fitnow)
-    print(fitnow)
     
     [params,[fracs1,fracs2]] = get_params_and_fracs(fitnow)
     result1 = np.concatenate( (params, fracs1) )
     result2 = np.concatenate( (params, fracs2) )
     
     # plot the least-squares fit compared to the histograms
+    # plt.scatter(histbins, hist1, color='blue', s=3)
+    # plt.scatter(histbins, hist2, color='red', s=3)
+    # plt.errorbar(histbins, hist1, hist1_errs, color='blue', label='histogram 1', ls='none')
+    # plt.errorbar(histbins, hist2, hist2_errs, color='red',label='histogram 2', ls='none')
     plt.errorbar(histbins, hist1, hist1_errs, color='blue', label='histogram 1')
     plt.errorbar(histbins, hist2, hist2_errs, color='red',label='histogram 2')
     plt.plot(histbins,[model_func(*result1,x) for x in histbins],'g--',label='fit 1')
@@ -149,35 +171,44 @@ def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, system, nwalkers=500,
     plt.xlabel('Constituent multiplicity')
     plt.ylabel('Probability')
     plt.legend()
-    plt.xlim((0,50))
+    plt.xlim((0,100))
     current_dir = Path.cwd()
-    plt.savefig(current_dir / 'plots' / system / (filelabel+'_least-squares_fit.png'))
+    plt.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_least-squares_fit.png'))
+
+    if DO_MCMC:
+        # do the MCMC    
+        print('Starting MCMC')
+        sampler = get_MCMC_samples(histbins, hist1, hist1_errs, histbins, hist2, hist2_errs, fitnow, [totweight1, totweight2], bnds=bounds, variation_factor=variation_factor, ndim=ndim, nwalkers=nwalkers, nsamples=nsamples)
+        print('Finished MCMC')
+        
+        samples = sampler.get_chain()
+        del sampler
+
+        with open("samples.pkl", "wb+") as f:
+            pickle.dump(samples, f)
     
-    # do the MCMC    
-    print('Starting MCMC')        
-    sampler = get_MCMC_samples(histbins, hist1, hist1_errs, histbins, hist2, hist2_errs, fitnow, [totweight1, totweight2], bnds=bounds, variation_factor=variation_factor, ndim=ndim, nwalkers=nwalkers, nsamples=nsamples)
-    print('Finished MCMC')
-    
-    samples = sampler.get_chain()
-    del sampler
+    else:
+        with open("samples.pkl", "rb") as f:
+            samples = pickle.load(f)
     
     # plot MCMC samples
     fig, axes = plt.subplots(ndim, figsize=(10,20), sharex=True)
     for i in range(ndim):
-        axes[i].plot(range(0,nsamples),samples[:, :, i], "k", alpha=0.3)
-        axes[i].axvline(x=burn_in,color='blue')   
-    plt.savefig(current_dir / 'plots' / system / (filelabel+'_MCMC_samples.png'))
+        axes[i].plot(range(0,nsamples),samples[:, :, i], "k", alpha=0.1)
+        axes[i].axvline(x=burn_in,color='blue')
+    plt.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_MCMC_samples.png'))
     
     # randomly sample "nkappa" points from the posterior on which to extract kappa
-    all_index_tuples = [ (i,j) for i in range(burn_in,len(samples)) for j in range(len(samples[0])) ]    
+    all_index_tuples = [ (i,j) for i in range(burn_in,len(samples)) for j in range(len(samples[0])) ]
     index_tuples = random.sample( all_index_tuples, nkappa )
     posterior_samples = np.array( [[samples[ index_tuple[0], index_tuple[1], i] for i in range(ndim)] for index_tuple in index_tuples ] )
     del samples
     
     # extract kappa from the posterior, only on points of the fit where at least one input histogram is non-zero
-    or_mask = (hist1_n>0)|(hist2_n>0)
-    mask_label = 'or' 
-    [kappas12, kappas21] = get_kappa(posterior_samples, datum1, datum2, histbins, or_mask, filelabel+'kappas_'+mask_label+'.png', system)    
+    or_mask = (hist1_n>2)|(hist2_n>2)
+    # or_mask = (hist1_n>0)&(hist2_n>0)&(((hist1_n>2)|(hist2_n>2)))
+    mask_label = 'or'
+    [kappas12, kappas21] = get_kappa(posterior_samples, datum1, datum2, histbins, or_mask, filelabel+'kappas_'+mask_label+'.png', system)
 
     del posterior_samples
     
@@ -230,7 +261,6 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
     kappa12 = np.zeros( len(all_samples) )
     kappa21 = np.zeros( len(all_samples) )
     
-
     mask1_zeros = hist1_n>0 # used for plotting only
     mask2_zeros = hist2_n>0 # used for plotting only
     fig, (ax1,ax2) = plt.subplots(1,2)
@@ -239,24 +269,25 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
 
     # "upsample" the histogram bins by upsample_factor to determine the bins on which kappa will be evaluated from the model
     model_bins = np.append( np.concatenate( ( [np.linspace(histbins[i],histbins[i+1],upsample_factor, endpoint=False) for i in range(len(histbins)-1)] ) ), histbins[-1] )
+    print('model bins', model_bins)
 
     decent_stats_indices = np.where( (hist1_n>10)&(hist2_n>10) )
     # minimum (left) and maximum (right) indices in model_bins where both histograms have more than 10 data points
     left_decent_stats_cutoff = upsample_factor*np.min( decent_stats_indices )
     right_decent_stats_cutoff = upsample_factor*np.max( decent_stats_indices )
+    print('decent stats cutoffs', left_decent_stats_cutoff, right_decent_stats_cutoff)
 
     mask_indices = np.where( mask )
     # minimum (left) and maximum (right) indices in model_bins where the mask is true
     left_mask_cutoff = upsample_factor*np.min( mask_indices )
     right_mask_cutoff = upsample_factor*np.max( mask_indices )
+    print('mask cutoffs', left_mask_cutoff, right_mask_cutoff)
     
     right_bins = model_bins[ left_decent_stats_cutoff:(right_mask_cutoff+1) ]
     left_bins = model_bins[ left_mask_cutoff:(right_decent_stats_cutoff+1) ]
-
    
     for sample_index in range( len(all_samples) ):
-        
-        
+    
         samplenow = put_fits_in_order(all_samples[sample_index], histbins, hist1, histbins, hist2) 
         
         [params,[fracs1,fracs2]] = get_params_and_fracs(samplenow) 
@@ -273,17 +304,16 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
         kappa21now_arg = right_bins[np.argmin(ratio21)]
         kappa21now = np.min(ratio21)
         
-
         ratio12_full = [model_func(*fit1,x)/model_func(*fit2,x) for x in model_bins] # used for plotting only
         ratio21_full = [model_func(*fit2,x)/model_func(*fit1,x) for x in model_bins] # used for plotting only
-        ax1.plot(kappa12now_arg,kappa12now,'ko')
+        ax1.plot(kappa12now_arg,kappa12now,'ko',alpha=0.1)
         ax1.plot(model_bins, ratio12_full,color='r',alpha=0.1)
         
         if sample_index==0:
-            ax2.plot(kappa21now_arg,kappa21now,'ko',label='extracted kappas')
+            ax2.plot(kappa21now_arg,kappa21now,'ko',alpha=0.1,label='extracted kappas')
             ax2.plot(model_bins, ratio21_full, color='r', alpha=0.1,label='MCMC fits')
         else:
-            ax2.plot(kappa21now_arg,kappa21now,'ko')
+            ax2.plot(kappa21now_arg,kappa21now,'ko',alpha=0.1)
             ax2.plot(model_bins, ratio21_full, color='r', alpha=0.1)
         
         kappa12[sample_index] = kappa12now
@@ -298,7 +328,7 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
     ax2.set_xlabel('Constituent multiplicity')
     ax2.legend()
     current_dir = Path.cwd()
-    plt.savefig(current_dir / 'plots' / system / filelabel)
+    plt.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / filelabel)
     
     return [kappa12, kappa21]
 
@@ -363,7 +393,7 @@ def calc_fracs_distribution(kappas):
 #     ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
 #     ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
     
-#     ax.set_xlim((0,50))
+#     ax.set_xlim((0,100))
 #     ax.set_xlabel('Constituent multiplicity')
 #     ax.set_ylabel('Probability')
 #     ax.legend()
@@ -394,14 +424,14 @@ def plot_topics(datum1, datum2, bins, kappas, filelabel, system):
     # ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
     # ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
     
-    ax.set_xlim((0,50))
+    ax.set_xlim((0,100))
     ax.set_xlabel('Constituent multiplicity')
     ax.set_ylabel('Probability')
     ax.legend()
     plt.tight_layout()
     
     current_dir = Path.cwd()
-    fig.savefig(current_dir / 'plots' / system / (filelabel+'_topics.png'))
+    fig.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_topics.png'))
     
 
 def plot_fractions(kappas, filelabel, system):
@@ -420,7 +450,7 @@ def plot_fractions(kappas, filelabel, system):
     plt.tight_layout()
     
     current_dir = Path.cwd()
-    fig.savefig(current_dir / 'plots' / system / (filelabel+'_fractions.png'))
+    fig.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_fractions.png'))
 
 
 #####################################################################
@@ -526,7 +556,7 @@ if __name__ == '__main__':
 
     import os
     try:
-        os.makedirs(f'./plots/{system}')
+        os.makedirs(f'./plots/{FOLDER_PREFIX}_{system}')
     except OSError as e:
         if e.errno != errno.EEXIST:
             raise
@@ -550,10 +580,10 @@ if __name__ == '__main__':
         system,
         nwalkers=nwalkers, 
         nsamples=nsamples, 
-        burn_in=burn_in, 
+        burn_in=burn_in,
         nkappa=nkappa, 
         variation_factor=1e-1, 
-        trytimes=15000,
+        trytimes=5000, # todo change
         bounds=[(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1)],
         fit_init_point=[13,1.5,1.5,10,1.5,1.5,5,2,2,5,2,2,0.5,0.3,0.5,0.3,0.5,0.3]
     )
