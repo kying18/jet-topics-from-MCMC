@@ -33,7 +33,7 @@ import os
 import errno
 
 FOLDER_PREFIX = 'NoMCMC_'
-DO_MCMC = True
+DO_MCMC = False
 
 ######################
 ## fitting function for the MCMC
@@ -271,7 +271,7 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
     model_bins = np.append( np.concatenate( ( [np.linspace(histbins[i],histbins[i+1],upsample_factor, endpoint=False) for i in range(len(histbins)-1)] ) ), histbins[-1] )
     print('model bins', model_bins)
 
-    decent_stats_indices = np.where( (hist1_n>10)&(hist2_n>10) )
+    decent_stats_indices = np.where( (hist1_n>10)&(hist2_n>10) )[0]
     # minimum (left) and maximum (right) indices in model_bins where both histograms have more than 10 data points
     left_decent_stats_cutoff = upsample_factor*np.min( decent_stats_indices )
     right_decent_stats_cutoff = upsample_factor*np.max( decent_stats_indices )
@@ -285,6 +285,28 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
     
     right_bins = model_bins[ left_decent_stats_cutoff:(right_mask_cutoff+1) ]
     left_bins = model_bins[ left_mask_cutoff:(right_decent_stats_cutoff+1) ]
+
+    # use the right- and left-half mean values for points with decent stats to determine whether each ratio has a left or right anchor point
+    left_half_bins = decent_stats_indices[ 0:int(np.round(len(decent_stats_indices)/2)) ]
+    right_half_bins = decent_stats_indices[ int(np.round(len(decent_stats_indices)/2)): ]
+    has_left_anchor = []
+    for ratio in [hist1/hist2, hist2/hist1]:
+        
+        if np.mean( ratio[left_half_bins] ) < np.mean( ratio[right_half_bins] ): # ratio has left anchor
+            has_left_anchor.append(True)
+            
+        else: # ratio has right anchor
+            has_left_anchor.append(False)
+        
+    # check that the two ratios have opposite anchor points as determined in this way. Otherwise, print a warning to the user.
+    if not has_left_anchor.count(True) == has_left_anchor.count(False):
+        print('Failed to unambiguously identify right and left anchor points! If the data has low statistics, kappa may not be extracted properly.')
+    if has_left_anchor[0]: # hist1/hist2 has left anchor 
+        anchor_bins_12 = left_bins
+        anchor_bins_21 = right_bins
+    else:
+        anchor_bins_12 = right_bins
+        anchor_bins_21 = left_bins
    
     for sample_index in range( len(all_samples) ):
     
@@ -295,13 +317,13 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
         fit1 = np.concatenate( (params, fracs1) )
         fit2 = np.concatenate( (params, fracs2) )
 
-        ratio12 = [model_func(*fit1,x)/model_func(*fit2,x) for x in left_bins]
-        ratio21 = [model_func(*fit2,x)/model_func(*fit1,x) for x in right_bins]
+        ratio12 = [model_func(*fit1,x)/model_func(*fit2,x) for x in anchor_bins_12]
+        ratio21 = [model_func(*fit2,x)/model_func(*fit1,x) for x in anchor_bins_21]
          
-        kappa12now_arg = left_bins[np.argmin(ratio12)]
+        kappa12now_arg = anchor_bins_12[np.argmin(ratio12)]
         kappa12now = np.min(ratio12)
             
-        kappa21now_arg = right_bins[np.argmin(ratio21)]
+        kappa21now_arg = anchor_bins_21[np.argmin(ratio21)]
         kappa21now = np.min(ratio21)
         
         ratio12_full = [model_func(*fit1,x)/model_func(*fit2,x) for x in model_bins] # used for plotting only
