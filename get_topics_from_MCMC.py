@@ -5,8 +5,8 @@
 # ./get_topics_from_MCMC.py "150_1_histograms_pp150_1_pbpb150_0_10_1" -1 100 8000 7000 1000
 # ./get_topics_from_MCMC.py "150_1_histograms_pbpb150_0_10_1_pbpb150_0_10_1_wide" -1 100 8000 7000 1000
 
-# ./get_topics_from_MCMC.py "150_1_histograms_pt100_dijets_x10_pbpb150_0_10_pbpb150_0_10_wide" -1 100 8000 7000 1000
-# ./get_topics_from_MCMC.py "150_1_histograms_pt100_dijets_x10_pp150_pbpb150_0_10" -1 100 8000 7000 1000
+# ./get_topics_from_MCMC.py "150_1_histograms_pt100_dijets_x100_pbpb150_0_10_pbpb150_0_10_wide" -1 100 8000 7000 1000
+# ./get_topics_from_MCMC.py "150_1_histograms_pt100_dijets_x100_pp150_pbpb150_0_10" -1 100 8000 7000 1000
 
 #############################################################################################
 #############################################################################################
@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
 import scipy.optimize as op
 from scipy import special
+from scipy.stats import wasserstein_distance
+from scipy.spatial import distance
 import random
 import emcee
 import math
@@ -31,9 +33,58 @@ from pathlib import Path
 import argparse
 import os
 import errno
+import csv 
 
-FOLDER_PREFIX = 'NoMCMC_'
 DO_MCMC = False
+# MASK_FACTOR = 0
+# DECENT_STATS_FACTOR = 0.0001
+FOLDER_PREFIX = "all"
+
+######################
+## importing data directly from csv
+######################
+
+def get_data(input_filename, sample1_label, sample2_label):
+    # input_filename is the path to the csv file
+    # sample1_label/sample2_label is string that represents that we want to use (ie this is the label on the LHS of the csv, like pbpb150_0_10_wide_zjet)
+    # sample1_label should probably be different than sample2_label if you want to run this code on multiple samples lol
+
+    samples = {}
+
+    suffixes = ["", "_error", "_quark", "_quark_error", "_gluon", "_gluon_error"]
+
+    with open(input_filename, 'rt') as f:
+        all_lines = f.readlines()
+        for i in range(len(all_lines)):
+            split_vals = all_lines[i].split(",")
+            for suffix in suffixes:
+                if split_vals[0] == sample1_label+suffix:
+                    samples['sample1'+suffix] = np.array(list(map(lambda x: float(x), split_vals[1:-1])))
+                elif split_vals[0] == sample2_label+suffix:
+                    samples['sample2'+suffix] = np.array(list(map(lambda x: float(x), split_vals[1:-1])))
+    # print(samples)
+    return samples  # should be a dictionary {'sample1': [histogram values], 'sample1_error': [histogram of errors], ...}
+
+def format_samples(samples, min_bin, max_bin):
+    # takes the dictionary of samples and creates normalized histogram: [[normalized histogram, normalized histogram errors, histogram of counts], total count]
+    # min_bin and max_bin are indices of minimum bin and maximum bin: [min_bin, max_bin)
+    # returns this list of histograms/count for sample1, sample2, combined quark, combined gluon (in that order)
+    def format_hist(hist, hist_error):
+        # hist is list of integers rep histogram bins
+        hist = hist[min_bin:max_bin]
+        hist_error = hist_error[min_bin:max_bin]
+        tot_n = sum(hist)
+        normalized_hist = 1/tot_n * hist
+        normalized_bin_error = 1/tot_n * hist_error
+
+        return [[normalized_hist, normalized_bin_error, hist], tot_n]
+    
+    sample1 = format_hist(samples['sample1'], samples['sample1_error'])
+    sample2 = format_hist(samples['sample2'], samples['sample2_error'])
+    quarks = format_hist(samples['sample1_quark'] + samples['sample2_quark'], np.sqrt(np.square(samples['sample1_quark_error']) + np.square(samples['sample2_quark_error'])))
+    gluons = format_hist(samples['sample1_gluon'] + samples['sample2_gluon'], np.sqrt(np.square(samples['sample1_gluon_error']) + np.square(samples['sample2_gluon_error'])))
+
+    return sample1, sample2, quarks, gluons
 
 ######################
 ## fitting function for the MCMC
@@ -105,7 +156,7 @@ def get_simul_fits(bins, hist1, hist2, trytimes, bnds, initial_point):
             fit = least_squares(func_simul_lsq, new_initial_point, args=(bins, hist1, bins, hist2, bnds))
             
         if costnow>fit['cost']:
-            print(fit['cost'])
+            # print(fit['cost'])
             # print(fit)
             fitnow = fit
             costnow = fit['cost']
@@ -134,8 +185,8 @@ def get_MCMC_samples(x1, y1, y1err, x2, y2, y2err, fit, tot_weights, bnds, varia
 ######################
 ## primary function to do the MCMC and extract kappa values from the posterior
 #####################
-def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, system, nwalkers=500, nsamples=20000, burn_in=100, variation_factor=1e-2, trytimes=500, nkappa=1000, bounds=[(0,25),(0,15),(0,5),(0,25),(0,15),(0,5),(0,25),(0,15),(0,5)], fit_init_point=[14,8,2,5,9,4,10,5,5,0.5,0.3,0.5,0.3]):
-
+def do_MCMC_and_get_kappa(datum1, datum2, min_bin, max_bin, filelabel, system, nwalkers=500, nsamples=20000, burn_in=100, variation_factor=1e-2, trytimes=500, nkappa=1000, bounds=[(0,25),(0,15),(0,5),(0,25),(0,15),(0,5),(0,25),(0,15),(0,5)], fit_init_point=[14,8,2,5,9,4,10,5,5,0.5,0.3,0.5,0.3]):
+    bins = range(max_bin - min_bin + 1)
     [[hist1, hist1_errs, hist1_n], totweight1] = datum1
     [[hist2, hist2_errs, hist2_n], totweight2] = datum2
     histbins = get_mean(bins)
@@ -164,16 +215,18 @@ def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, system, nwalkers=500,
     # plt.scatter(histbins, hist2, color='red', s=3)
     # plt.errorbar(histbins, hist1, hist1_errs, color='blue', label='histogram 1', ls='none')
     # plt.errorbar(histbins, hist2, hist2_errs, color='red',label='histogram 2', ls='none')
-    plt.errorbar(histbins, hist1, hist1_errs, color='blue', label='histogram 1')
-    plt.errorbar(histbins, hist2, hist2_errs, color='red',label='histogram 2')
-    plt.plot(histbins,[model_func(*result1,x) for x in histbins],'g--',label='fit 1')
-    plt.plot(histbins,[model_func(*result2,x) for x in histbins],'m--',label='fit 2')
+    plt.errorbar(histbins+min_bin, hist1, hist1_errs, color='blue', label='histogram 1')
+    plt.errorbar(histbins+min_bin, hist2, hist2_errs, color='red',label='histogram 2')
+    plt.plot(histbins+min_bin,[model_func(*result1,x) for x in histbins],'g--',label='fit 1')
+    plt.plot(histbins+min_bin,[model_func(*result2,x) for x in histbins],'m--',label='fit 2')
     plt.xlabel('Constituent multiplicity')
     plt.ylabel('Probability')
     plt.legend()
-    plt.xlim((0,100))
+    plt.xlim((min_bin,max_bin))
+    plt.title('Input Histograms')
     current_dir = Path.cwd()
-    plt.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_least-squares_fit.png'))
+    if DO_MCMC:
+        plt.savefig(current_dir / 'plots' / f'{system}' / (filelabel+'_least-squares_fit.png'))
 
     if DO_MCMC:
         # do the MCMC    
@@ -192,23 +245,28 @@ def do_MCMC_and_get_kappa(datum1, datum2, bins, filelabel, system, nwalkers=500,
             samples = pickle.load(f)
     
     # plot MCMC samples
-    fig, axes = plt.subplots(ndim, figsize=(10,20), sharex=True)
+    fig, axes = plt.subplots(ndim, figsize=(10,16), sharex=True)
     for i in range(ndim):
         axes[i].plot(range(0,nsamples),samples[:, :, i], "k", alpha=0.1)
         axes[i].axvline(x=burn_in,color='blue')
-    plt.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_MCMC_samples.png'))
+    fig.suptitle('MCMC Samples', fontsize=20)
+    plt.savefig(current_dir / 'plots' / f'{system}' / (filelabel+'_MCMC_samples.png'))
     
     # randomly sample "nkappa" points from the posterior on which to extract kappa
     all_index_tuples = [ (i,j) for i in range(burn_in,len(samples)) for j in range(len(samples[0])) ]
     index_tuples = random.sample( all_index_tuples, nkappa )
-    posterior_samples = np.array( [[samples[ index_tuple[0], index_tuple[1], i] for i in range(ndim)] for index_tuple in index_tuples ] )
+    posterior_samples = np.array( [[samples[ tup[0], tup[1], i] for i in range(ndim)] for tup in index_tuples ] )
+    # first_dim_sample = random.choices(range(burn_in, len(samples)), k=nkappa)
+    # second_dim_sample = random.choices(range(len(samples[0])), k=nkappa)
+    # posterior_samples = np.array( [[samples[ first_dim_sample[j], second_dim_sample[j], i] for i in range(ndim)] for j in range(nkappa) ] )
     del samples
     
     # extract kappa from the posterior, only on points of the fit where at least one input histogram is non-zero
-    or_mask = (hist1_n>2)|(hist2_n>2)
-    # or_mask = (hist1_n>0)&(hist2_n>0)&(((hist1_n>2)|(hist2_n>2)))
+    # or_mask = (hist1_n>5)|(hist2_n>5)
+    # or_mask = (hist1_n>MASK_FACTOR*totweight1)|(hist2_n>MASK_FACTOR*totweight2) #&(((hist1_n>2)|(hist2_n>2)))
+    or_mask = (hist1_n>0)|(hist2_n>0)
     mask_label = 'or'
-    [kappas12, kappas21] = get_kappa(posterior_samples, datum1, datum2, histbins, or_mask, filelabel+'kappas_'+mask_label+'.png', system)
+    [kappas12, kappas21] = get_kappa(posterior_samples, datum1, datum2, histbins, min_bin, or_mask, filelabel+'kappas_'+mask_label+'.png', system)
 
     del posterior_samples
     
@@ -253,7 +311,7 @@ def lnlike_individ(y, yerr, model, totweight):
 ######################
 ## function to extract kappa values given a sampling of the posterior, and a mask specifying where kappa can be extracted
 #####################      
-def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, upsample_factor=10):
+def get_kappa(all_samples, datum1, datum2, histbins, min_bin, mask, filelabel, system, upsample_factor=10):
     
     [[hist1, hist1_errs, hist1_n], _] = datum1
     [[hist2, hist2_errs, hist2_n], _] = datum2
@@ -263,25 +321,22 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
     
     mask1_zeros = hist1_n>0 # used for plotting only
     mask2_zeros = hist2_n>0 # used for plotting only
-    fig, (ax1,ax2) = plt.subplots(1,2)
-    ax1.plot(histbins[mask2_zeros],hist1[mask2_zeros]/hist2[mask2_zeros],'b--')
-    ax2.plot(histbins[mask1_zeros],hist2[mask1_zeros]/hist1[mask1_zeros],'b--',label='data')
+    fig, (ax1,ax2) = plt.subplots(1,2, figsize=(8, 6))
+    ax1.plot(histbins[mask2_zeros]+min_bin,hist1[mask2_zeros]/hist2[mask2_zeros],'b--')
+    ax2.plot(histbins[mask1_zeros]+min_bin,hist2[mask1_zeros]/hist1[mask1_zeros],'b--',label='data')
 
     # "upsample" the histogram bins by upsample_factor to determine the bins on which kappa will be evaluated from the model
     model_bins = np.append( np.concatenate( ( [np.linspace(histbins[i],histbins[i+1],upsample_factor, endpoint=False) for i in range(len(histbins)-1)] ) ), histbins[-1] )
-    print('model bins', model_bins)
 
     decent_stats_indices = np.where( (hist1_n>10)&(hist2_n>10) )[0]
     # minimum (left) and maximum (right) indices in model_bins where both histograms have more than 10 data points
     left_decent_stats_cutoff = upsample_factor*np.min( decent_stats_indices )
     right_decent_stats_cutoff = upsample_factor*np.max( decent_stats_indices )
-    print('decent stats cutoffs', left_decent_stats_cutoff, right_decent_stats_cutoff)
 
     mask_indices = np.where( mask )
     # minimum (left) and maximum (right) indices in model_bins where the mask is true
     left_mask_cutoff = upsample_factor*np.min( mask_indices )
     right_mask_cutoff = upsample_factor*np.max( mask_indices )
-    print('mask cutoffs', left_mask_cutoff, right_mask_cutoff)
     
     right_bins = model_bins[ left_decent_stats_cutoff:(right_mask_cutoff+1) ]
     left_bins = model_bins[ left_mask_cutoff:(right_decent_stats_cutoff+1) ]
@@ -325,18 +380,18 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
             
         kappa21now_arg = anchor_bins_21[np.argmin(ratio21)]
         kappa21now = np.min(ratio21)
-        
+
         ratio12_full = [model_func(*fit1,x)/model_func(*fit2,x) for x in model_bins] # used for plotting only
         ratio21_full = [model_func(*fit2,x)/model_func(*fit1,x) for x in model_bins] # used for plotting only
-        ax1.plot(kappa12now_arg,kappa12now,'ko',alpha=0.1)
-        ax1.plot(model_bins, ratio12_full,color='r',alpha=0.1)
+        ax1.plot(kappa12now_arg+min_bin,kappa12now,'ko',alpha=0.1)
+        ax1.plot(model_bins+min_bin, ratio12_full,color='r',alpha=0.1)
         
         if sample_index==0:
-            ax2.plot(kappa21now_arg,kappa21now,'ko',alpha=0.1,label='extracted kappas')
-            ax2.plot(model_bins, ratio21_full, color='r', alpha=0.1,label='MCMC fits')
+            ax2.plot(kappa21now_arg+min_bin,kappa21now,'ko',alpha=0.1,label='extracted kappas')
+            ax2.plot(model_bins+min_bin, ratio21_full, color='r', alpha=0.1,label='MCMC fits')
         else:
-            ax2.plot(kappa21now_arg,kappa21now,'ko',alpha=0.1)
-            ax2.plot(model_bins, ratio21_full, color='r', alpha=0.1)
+            ax2.plot(kappa21now_arg+min_bin,kappa21now,'ko',alpha=0.1)
+            ax2.plot(model_bins+min_bin, ratio21_full, color='r', alpha=0.1)
         
         kappa12[sample_index] = kappa12now
         kappa21[sample_index] = kappa21now
@@ -349,8 +404,9 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
     ax1.set_xlabel('Constituent multiplicity')
     ax2.set_xlabel('Constituent multiplicity')
     ax2.legend()
+    fig.suptitle('MCMC Fit and Extracted Kappas')
     current_dir = Path.cwd()
-    plt.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / filelabel)
+    plt.savefig(current_dir / 'plots' / system / filelabel)
     
     return [kappa12, kappa21]
 
@@ -360,14 +416,14 @@ def get_kappa(all_samples, datum1, datum2, histbins, mask, filelabel, system, up
 #####################################################################
     
 def topic_and_err(p1, p1_errs, p2, p2_errs, kappa, kappa_errs):
-    
     topic = (p1 - kappa*p2)/(1-kappa)
     topic_errs = np.sqrt((p1 - p2)**2 * kappa_errs**2 + (1 - kappa)**2 * (p1_errs**2 + kappa**2 * p2_errs**2)) / (1 - kappa)**2
-    return [topic, topic_errs]
+    return topic, topic_errs
 
 def calc_topics(p1, p1_errs, p2, p2_errs, kappa12, kappa21):
-    
-    return [topic_and_err(p1,p1_errs,p2,p2_errs,*kappa12), topic_and_err(p2,p2_errs,p1,p1_errs,*kappa21)]
+    topic1, topic1_err = topic_and_err(p1,p1_errs,p2,p2_errs,*kappa12)
+    topic2, topic2_err = topic_and_err(p2,p2_errs,p1,p1_errs,*kappa21)
+    return topic1, topic2_err, topic2, topic2_err
 
 def calc_fracs(kappa12, kappa21):
     
@@ -391,70 +447,98 @@ def calc_fracs_distribution(kappas):
 # Functions to plot topics and fractions ############################
 #####################################################################
 
-# def plot_topics(datum1, datum2, datumQ, datumG, bins, kappas, filelabel, system):
-    
-#     [[hist1, hist1_errs, _], _] = datum1
-#     [[hist2, hist2_errs, _], _] = datum2
-#     [[histQ, histQ_errs, _], _] = datumQ
-#     [[histG, histG_errs, _], _] = datumG
-#     histbins = get_mean(bins)
-    
-#     kappa12 = [np.mean(kappas[0]), np.std(kappas[0])]
-#     kappa21 = [np.mean(kappas[1]), np.std(kappas[1])]
-#     [t1, t2] = calc_topics(hist1, hist1_errs, hist2, hist2_errs, kappa12, kappa21)
-    
-#     fig, ax = plt.subplots()
-#     binint = np.linspace(0,max(bins)-10**-5,10000) # for plotting only
-#     colors = ['red','blue']
-#     ax.plot(binint,plot_hist(binint, bins, t2[0]), color=colors[0], label='Topic 2')
-#     ax.fill_between(binint,plot_hist(binint, bins, t2[0] - t2[1]),plot_hist(binint, bins, t2[0] + t2[1]), color=colors[0], alpha=0.3)
+def plot_unnormalized_input(datum1, datum2, bins, filelabel, system):
+    [[hist1_normalized, hist1_errs, hist1], hist1_n] = datum1
+    [[hist2_normalized, hist2_errs, hist2], hist2_n] = datum2
+    bins = range(min_bin, max_bin+1)
+    histbins = get_mean(bins)
 
-#     ax.plot(binint,plot_hist(binint, bins, t1[0]), color=colors[1], label='Topic 1')
-#     ax.fill_between(binint,plot_hist(binint, bins, t1[0] - t1[1]),plot_hist(binint, bins, t1[0] + t1[1]), alpha=0.3, color=colors[1])
-    
-#     ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
-#     ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
-    
-#     ax.set_xlim((0,100))
-#     ax.set_xlabel('Constituent multiplicity')
-#     ax.set_ylabel('Probability')
-#     ax.legend()
-#     plt.tight_layout()
-    
-#     current_dir = Path.cwd()
-#     fig.savefig(current_dir / 'plots' / system / (filelabel+'_topics.png'))
+    plt.errorbar(histbins, hist1, hist1_errs*hist1_n, color='blue', label='histogram 1')
+    plt.errorbar(histbins, hist2, hist2_errs*hist2_n, color='red',label='histogram 2')
+    plt.xlabel('Constituent multiplicity')
+    plt.ylabel('N')
+    plt.legend()
+    plt.xlim((min_bin,max_bin))
+    plt.title('Input Histograms (Unnormalized)')
+    current_dir = Path.cwd()
+    plt.savefig(current_dir / 'plots' / system / (filelabel+'_inputs_unnormalized.png'))
 
-def plot_topics(datum1, datum2, bins, kappas, filelabel, system):
-    
+def plot_topics(datum1, datum2, datumQ, datumG, bins, kappas, filelabel, system):
     [[hist1, hist1_errs, _], _] = datum1
     [[hist2, hist2_errs, _], _] = datum2
+    [[histQ, histQ_errs, _], _] = datumQ
+    [[histG, histG_errs, _], _] = datumG
     histbins = get_mean(bins)
     
     kappa12 = [np.mean(kappas[0]), np.std(kappas[0])]
     kappa21 = [np.mean(kappas[1]), np.std(kappas[1])]
-    [t1, t2] = calc_topics(hist1, hist1_errs, hist2, hist2_errs, kappa12, kappa21)
-    
-    fig, ax = plt.subplots()
-    binint = np.linspace(0,max(bins)-10**-5,10000) # for plotting only
-    colors = ['red','blue']
-    ax.plot(binint,plot_hist(binint, bins, t2[0]), color=colors[0], label='Topic 2')
-    ax.fill_between(binint,plot_hist(binint, bins, t2[0] - t2[1]),plot_hist(binint, bins, t2[0] + t2[1]), color=colors[0], alpha=0.3)
+    topic1, topic1_err, topic2, topic2_err = calc_topics(hist1, hist1_errs, hist2, hist2_errs, kappa12, kappa21) # t1 is [topic1, topic1errs], etc
 
-    ax.plot(binint,plot_hist(binint, bins, t1[0]), color=colors[1], label='Topic 1')
-    ax.fill_between(binint,plot_hist(binint, bins, t1[0] - t1[1]),plot_hist(binint, bins, t1[0] + t1[1]), alpha=0.3, color=colors[1])
+    fig, ax = plt.subplots()
     
-    # ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
-    # ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
+    ax.step(histbins,topic1,where='mid',color='blue',label='Topic 1')
+    ax.fill_between(bins[1:], topic1-topic1_err, topic1+topic1_err, step='pre', color='blue', alpha=0.3)
+    ax.step(histbins,topic2,where='mid',color='red', label='Topic 2')
+    ax.fill_between(bins[1:], topic2-topic2_err, topic2+topic2_err, step='pre', color='red', alpha=0.3)
+
+    ax.plot(get_mean(bins),histQ,color='k',label=r'$\gamma$+q')
+    ax.plot(get_mean(bins),histG,color='k',linestyle='--',dashes=(5,5),label=r'$\gamma$+g')
     
-    ax.set_xlim((0,100))
+    ax.set_xlim((bins[0],bins[-1]))
     ax.set_xlabel('Constituent multiplicity')
     ax.set_ylabel('Probability')
     ax.legend()
+    plt.title('Resulting Topics')
     plt.tight_layout()
     
     current_dir = Path.cwd()
-    fig.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_topics.png'))
-    
+    fig.savefig(current_dir / 'plots' / system / (filelabel+'_topics.png'))
+
+
+    # plot ratios
+    dist_topic1g = distance.cosine(topic1, histG)
+    # dist_topic1q = distance.cosine(topic1, histQ)
+    dist_topic2g = distance.cosine(topic2, histG)
+    # dist_topic2q = distance.cosine(topic2, histQ)
+
+    # print(dist_topic1g, dist_topic1q, dist_topic2g, dist_topic2q)
+    if dist_topic1g < dist_topic2g: # this means topic 1 is gluon and topic 2 is quark (gluon is easier to match)
+        fig, ax = plt.subplots()
+        ax.plot(get_mean(bins),np.divide(topic1, topic2), color='blue', label='Topic 1 / Topic 2')
+        # ax.step(histbins,np.divide(topic1,topic2),where='mid',color='blue',label='Topic 1/Topic 2')
+        ax.plot(get_mean(bins),np.divide(histG, histQ),color='k',label=r'$\gamma$+g / $\gamma$+q')
+        save_plot(fig, ax, 'Constituent Multiplicity', 'Ratio', 'Resulting Topics Ratios (q/g)', 'ratiosqg', (bins[0],bins[-1]), (-20, 20), filelabel, system)
+
+        fig, ax = plt.subplots()
+        # ax.step(histbins,np.divide(topic2,topic1),where='mid',color='red',label='Topic 2/Topic 1')
+        ax.plot(get_mean(bins),np.divide(topic2, topic1), color='red', label='Topic 2 / Topic 1')
+        ax.plot(get_mean(bins),np.divide(histQ, histG),color='k',label=r'$\gamma$+q / $\gamma$+g')
+        save_plot(fig, ax, 'Constituent Multiplicity', 'Ratio', 'Resulting Topics Ratios (g/q)', 'ratiosgq', (bins[0],bins[-1]), (-20, 20), filelabel, system)
+    else:
+        fig, ax = plt.subplots()
+        # ax.step(histbins,np.divide(topic1,topic2),where='mid',color='red',label='Topic 1/Topic 2')
+        ax.plot(get_mean(bins),np.divide(topic1, topic2), color='blue', label='Topic 1 / Topic 2')
+        ax.plot(get_mean(bins),np.divide(histQ, histG),color='k',label=r'$\gamma$+q / $\gamma$+g')
+        save_plot(fig, ax, 'Constituent Multiplicity', 'Ratio', 'Resulting Topics Ratios (q/g)', 'ratiosqg', (bins[0],bins[-1]), (-20, 20), filelabel, system)
+
+        fig, ax = plt.subplots()
+        # ax.step(histbins,np.divide(topic2,topic1),where='mid',color='red',label='Topic 2/Topic 1')
+        ax.plot(get_mean(bins),np.divide(topic1, topic1), color='red', label='Topic 2 / Topic 1')
+        ax.plot(get_mean(bins),np.divide(histG, histQ),color='k',label=r'$\gamma$+g / $\gamma$+q')
+        save_plot(fig, ax, 'Constituent Multiplicity', 'Ratio', 'Resulting Topics Ratios (g/q)', 'ratiosgq', (bins[0],bins[-1]), (-20, 20), filelabel, system)
+
+def save_plot(fig, ax, xlabel, ylabel, title, suffix, xlim, ylim, filelabel, system):
+    ax.set_xlim(xlim)
+    ax.set_xlabel(xlabel)
+    ax.set_ylim(ylim)
+    ax.set_ylabel(ylabel)
+    ax.legend()
+    plt.title(title)
+    plt.tight_layout()
+
+    current_dir = Path.cwd()
+    print(current_dir)
+    fig.savefig(current_dir / 'plots' / system / (filelabel+f'_{suffix}.png'))
 
 def plot_fractions(kappas, filelabel, system):
     
@@ -462,17 +546,23 @@ def plot_fractions(kappas, filelabel, system):
     
     fig, (ax1,ax2) = plt.subplots(1,2,figsize=(8,5))
     
-    hist, edges = np.histogram(f1)
-    ax1.plot(get_mean(edges), hist)
+    ax1.hist(x=f1, color='k', bins=20, alpha=0.3)
+    ax1.hist(x=f1, color='k', bins=20, histtype='step')
     ax1.set_xlabel('fraction1')
+    ax1.set_ylabel('Count')
     
-    hist,edges = np.histogram(f2)
-    ax2.plot(get_mean(edges), hist)
+    ax2.hist(x=f2, color='k', bins=20, alpha=0.3)
+    ax2.hist(x=f2, color='k', bins=20, histtype='step')
     ax2.set_xlabel('fraction2')
+    ax2.set_ylabel('Count')
     plt.tight_layout()
+
+    plt.subplots_adjust(top=0.9)
+    fig.suptitle('Fractions Histogram')
     
     current_dir = Path.cwd()
-    fig.savefig(current_dir / 'plots' / f'{FOLDER_PREFIX}_{system}' / (filelabel+'_fractions.png'))
+    fig.savefig(current_dir / 'plots' / system / (filelabel+'_fractions.png'))
+
 
 
 #####################################################################
@@ -526,95 +616,168 @@ def plot_hist(int_bins, orig_bins, func):
 #####################################################################
 
 if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser(description='Make plot data for paper')
-    parser.add_argument('system')
-    parser.add_argument('ptindex', type=int)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('system') # this should be string representing the csv file name, if csv file is ./data/150_pt100_qgfracs.csv, user should input 150_pt100_qgfracs
+    parser.add_argument('sample1')
+    parser.add_argument('sample2')
     parser.add_argument('nwalkers', type=int)
     parser.add_argument('nsamples', type=int)
     parser.add_argument('burn_in', type=int)
     parser.add_argument('nkappa', type=int)
-    # make this more flexible so we can use non-int bins
-    # parser.add_argument('min_bin', type=int)
-    # parser.add_argument('max_bin', type=int)
+    parser.add_argument('min_bin', type=int)
+    parser.add_argument('max_bin', type=int)
     args = parser.parse_args()
-        
+
     system = args.system
-    ptindex = args.ptindex
+    sample1_label = args.sample1
+    sample2_label = args.sample2
     nwalkers = args.nwalkers
     nsamples = args.nsamples
     burn_in = args.burn_in
     nkappa = args.nkappa
-    # min_bin = args.min_bin
-    # max_bin = args.max_bin
-    min_bin = 0
-    max_bin = 100 
-    
+    min_bin = args.min_bin
+    max_bin = args.max_bin
+
     if nkappa > (nsamples-burn_in)*nwalkers:
         print('number of times to try to sample kappa must be smaller than (nsamples-burn_in)*nwalkers')
-    # if ptindex<0 or ptindex>=3:
-    #     print('Only valid ptindex values are 0, 1, or 2.')
-    
-    if system=='PP':
-        filename = 'PP_JEWEL_etamax1_constmult'
-    if system=='HI':
-        filename = 'HI_JEWEL_etamax1_constmult_13invnbYJ'
-    else:
-        filename = system
 
-    [indJJ, indYJ, indQ, indG] = list(range(0,4))
+    folder_name = system + '_' + sample1_label + '_' + sample2_label
+    filelabel = folder_name + '_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)
+    # savelabel = filelabel+'_pt'+str(ptindex)
 
-    current_dir = Path.cwd()
-    # input_dir = current_dir / "inputs"
-    # kappas_dir = current_dir / "kappas"
+    samples = get_data(f'./data/{system}.csv', sample1_label, sample2_label)
+    sample1, sample2, sample_quarks, sample_gluons = format_samples(samples, min_bin, max_bin)
 
-    file = open( current_dir / "inputs" / (filename+'.pickle'), 'rb')
-    datum = pickle.load(file)
-    file.close()
-    print(datum)
-
-    filelabel = system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)
-    savelabel = filelabel+'_pt'+str(ptindex)
-
-    import os
     try:
-        os.makedirs(f'./plots/{FOLDER_PREFIX}_{system}')
+        os.makedirs(f'./plots/{folder_name}')
     except OSError as e:
         if e.errno != errno.EEXIST:
             raise
 
-    dataJJ = datum[indJJ][ptindex] if ptindex != -1 else datum[indJJ]
-    dataYJ = datum[indYJ][ptindex] if ptindex != -1 else datum[indYJ]
+    bins = range(min_bin, max_bin+1)
+    plot_unnormalized_input(sample1, sample2, bins, filelabel, folder_name)
 
-    print(len(dataJJ[0][0]), len(dataYJ[0][0]))
+    # bins = range(max_bin-min_bin+1) # we will need to shift the axes
+    # kappas_now = do_MCMC_and_get_kappa(
+    #     sample1,
+    #     sample2,
+    #     min_bin,
+    #     max_bin,
+    #     filelabel,
+    #     folder_name,
+    #     nwalkers=nwalkers,
+    #     nsamples=nsamples,
+    #     burn_in=burn_in,
+    #     nkappa=nkappa,
+    #     variation_factor=1e-1, 
+    #     trytimes=60000 if DO_MCMC else 100, # todo change
+    #     bounds=[(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1)],
+    #     fit_init_point=[13,1.5,1.5,10,1.5,1.5,5,2,2,5,2,2,0.5,0.3,0.5,0.3,0.5,0.3]
+    # )
+    # with open('kappas_now.pkl', 'wb+') as f:
+    #     pickle.dump(kappas_now, f)
+
+    print('PLOTTING')
+
+    with open('kappas_now.pkl', 'rb') as f:
+        kappas_now = pickle.load(f)
+
+    plot_fractions(kappas_now, filelabel, folder_name)
+    plot_topics(sample1, sample2, sample_quarks, sample_gluons, bins, kappas_now, filelabel, folder_name)
+
+
+
+    # parser = argparse.ArgumentParser(description='Make plot data for paper')
+    # parser.add_argument('system')
+    # parser.add_argument('ptindex', type=int)
+    # parser.add_argument('nwalkers', type=int)
+    # parser.add_argument('nsamples', type=int)
+    # parser.add_argument('burn_in', type=int)
+    # parser.add_argument('nkappa', type=int)
+    # # make this more flexible so we can use non-int bins
+    # # parser.add_argument('min_bin', type=int)
+    # # parser.add_argument('max_bin', type=int)
+    # args = parser.parse_args()
+
+    # system = args.system
+    # ptindex = args.ptindex
+    # nwalkers = args.nwalkers
+    # nsamples = args.nsamples
+    # burn_in = args.burn_in
+    # nkappa = args.nkappa
+    # # min_bin = args.min_bin
+    # # max_bin = args.max_bin
     
-    # quickly iterate through the data and get the bins
-    for i in range(3):
-        dataJJ[0][i] = dataJJ[0][i][min_bin:max_bin]
-        dataYJ[0][i] = dataYJ[0][i][min_bin:max_bin]
+    # if nkappa > (nsamples-burn_in)*nwalkers:
+    #     print('number of times to try to sample kappa must be smaller than (nsamples-burn_in)*nwalkers')
+    # # if ptindex<0 or ptindex>=3:
+    # #     print('Only valid ptindex values are 0, 1, or 2.')
+    
+    # if system=='PP':
+    #     filename = 'PP_JEWEL_etamax1_constmult'
+    # if system=='HI':
+    #     filename = 'HI_JEWEL_etamax1_constmult_13invnbYJ'
+    # else:
+    #     filename = system
 
-    bins = range(int(min_bin),int(max_bin))   # 0 indexed 
-    kappas_now = do_MCMC_and_get_kappa(
-        dataJJ,
-        dataYJ,  
-        bins, 
-        savelabel,
-        system,
-        nwalkers=nwalkers, 
-        nsamples=nsamples, 
-        burn_in=burn_in,
-        nkappa=nkappa, 
-        variation_factor=1e-1, 
-        trytimes=5000, # todo change
-        bounds=[(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1)],
-        fit_init_point=[13,1.5,1.5,10,1.5,1.5,5,2,2,5,2,2,0.5,0.3,0.5,0.3,0.5,0.3]
-    )
+    # [indJJ, indYJ, indQ, indG] = list(range(0,4))
 
-    file = open(current_dir / "kappas" / ('kappas_'+system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)+'_pt'+str(ptindex)+'.pickle'), 'wb')
-    pickle.dump([kappas_now], file)
-    file.close()
+    # current_dir = Path.cwd()
+    # # input_dir = current_dir / "inputs"
+    # # kappas_dir = current_dir / "kappas"
 
-    plot_fractions(kappas_now, filelabel, system)
+    # file = open( current_dir / "inputs" / (filename+'.pickle'), 'rb')
+    # datum = pickle.load(file)
+    # file.close()
+    # # print(datum)
+
+    # filelabel = system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)
+    # savelabel = filelabel+'_pt'+str(ptindex)
+
+    # import os
+    # try:
+    #     os.makedirs(f'./plots/{system}')
+    # except OSError as e:
+    #     if e.errno != errno.EEXIST:
+    #         raise
+
+    # dataJJ = datum[indJJ][ptindex] if ptindex != -1 else datum[indJJ]
+    # dataYJ = datum[indYJ][ptindex] if ptindex != -1 else datum[indYJ]
+
+    # # print(len(dataJJ[0][0]), len(dataYJ[0][0]))
+    
+    # # quickly iterate through the data and get the bins
+    # # for i in range(3):
+    # #     dataJJ[0][i] = dataJJ[0][i][min_bin:max_bin]
+    # #     dataYJ[0][i] = dataYJ[0][i][min_bin:max_bin]
+    
+    # print(len(dataJJ[0][0]), len(dataYJ[0][0]))
+
+    # min_bin = 0
+    # max_bin = len(dataJJ[0][0]) + 1
+
+    # bins = range(int(min_bin),int(max_bin))   # 0 indexed 
+    # kappas_now = do_MCMC_and_get_kappa(
+    #     dataJJ,
+    #     dataYJ,  
+    #     bins, 
+    #     savelabel,
+    #     system,
+    #     nwalkers=nwalkers, 
+    #     nsamples=nsamples, 
+    #     burn_in=burn_in,
+    #     nkappa=nkappa, 
+    #     variation_factor=1e-1, 
+    #     trytimes=60000 if DO_MCMC else 1000, # todo change
+    #     bounds=[(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,50),(1,15),(-20,20),(0,1),(0,1),(0,1),(0,1),(0,1),(0,1)],
+    #     fit_init_point=[13,1.5,1.5,10,1.5,1.5,5,2,2,5,2,2,0.5,0.3,0.5,0.3,0.5,0.3]
+    # )
+
+    # file = open(current_dir / "kappas" / ('kappas_'+system+'_SN,N=4_'+str(nwalkers)+','+str(nsamples)+','+str(burn_in)+'_pt'+str(ptindex)+'.pickle'), 'wb')
+    # pickle.dump([kappas_now], file)
+    # file.close()
+
+    # plot_fractions(kappas_now, filelabel, system)
     # plot_topics(datum[indJJ][ptindex], datum[indYJ][ptindex], datum[indQ][ptindex], datum[indG][ptindex], bins, kappas_now, filelabel, system)
-    plot_topics(dataJJ, dataYJ, bins, kappas_now, filelabel, system)
+    # # plot_topics(dataJJ, dataYJ, bins, kappas_now, filelabel, system)
 
